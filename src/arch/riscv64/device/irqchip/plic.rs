@@ -19,6 +19,7 @@ struct InterruptThresholdRegs {
 }
 
 static MAX_CONTEXTS: usize = 64;
+const SUPERVISOR_EXTERNAL_INTERRUPT: u32 = 9;
 
 #[repr(packed(4))]
 #[repr(C)]
@@ -144,11 +145,19 @@ impl InterruptController for Plic {
         // TODO spread irqs over all the cores when we have them?
         let hlic_ic_idx = hlic::irqchip_for_hart(BOOT_HART_ID.load(Ordering::Relaxed))
             .expect("Could not find HLIC irqchip for the boot hart while initing PLIC");
+        // A hart can have both machine and supervisor PLIC contexts. The kernel runs in
+        // supervisor mode, so selecting the first context for the hart can route IRQs to M-mode.
         self.context = desc
             .parents
             .iter()
-            .position(|x| x.parent_interrupt.is_some() && x.parent == hlic_ic_idx)
-            .unwrap();
+            .position(|x| {
+                x.parent == hlic_ic_idx
+                    && matches!(
+                        x.parent_interrupt,
+                        Some(IrqCell::L1(SUPERVISOR_EXTERNAL_INTERRUPT))
+                    )
+            })
+            .expect("Could not find supervisor PLIC context for the boot hart");
         info!("PLIC: using context {}", self.context);
 
         let regs = unsafe { self.regs.as_mut().unwrap() };
